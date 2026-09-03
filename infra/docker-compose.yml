@@ -1,0 +1,157 @@
+x-python-env: &python-env
+  PYTHONUNBUFFERED: "1"
+  KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+  QDRANT_URL: http://qdrant:6333
+  DATABASE_URL: postgresql+psycopg2://black_ice:black_ice@postgres:5432/black_ice
+  MATCH_THRESHOLD: "0.45"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+  # Shadow-mode candidate model evaluation — off by default, zero overhead.
+  # Flip to "true" to also run buffalo_s (see embedding.py) against a separate
+  # gallery on every enroll/frame and compare via scripts/shadow_report.py.
+  SHADOW_EMBEDDING_ENABLED: "false"
+
+services:
+  # --- infra ---
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    # Kafka-protocol compatible, single binary (no Zookeeper) — same client code
+    # (confluent-kafka) as a real Kafka cluster; swap the bootstrap server in prod.
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 512M
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:9092
+    ports:
+      - "9092:9092"
+
+  qdrant:
+    image: qdrant/qdrant:v1.11.3
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=black_ice
+      - POSTGRES_PASSWORD=black_ice
+      - POSTGRES_DB=black_ice
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # --- pipeline ---
+  ingest:
+    build:
+      context: ..
+      dockerfile: services/ingest/Dockerfile
+    environment:
+      <<: *python-env
+      CAMERA_ID: cam-0
+      SOURCE: demo
+      INGEST_FPS: "5"
+    depends_on:
+      - redpanda
+
+  detect:
+    build:
+      context: ..
+      dockerfile: services/detect/Dockerfile
+    environment: *python-env
+    depends_on:
+      - redpanda
+    volumes:
+      - insightface_models:/root/.insightface
+    # Horizontal scale-out unit (spec 3.1: pods, not threads):
+    # docker compose up --scale detect=3
+
+  embed:
+    build:
+      context: ..
+      dockerfile: services/embed/Dockerfile
+    environment: *python-env
+    depends_on:
+      - redpanda
+    volumes:
+      - insightface_models:/root/.insightface
+
+  match:
+    build:
+      context: ..
+      dockerfile: services/match/Dockerfile
+    environment:
+      <<: *python-env
+      BLACK_ICE_API_KEYS: "dev-admin-key:admin,dev-operator-key:operator"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redpanda
+      - qdrant
+      - postgres
+    volumes:
+      - insightface_models:/root/.insightface
+
+  ui:
+    image: python:3.11-slim
+    working_dir: /ui
+    volumes:
+      - ../ui:/ui
+    command: ["python", "-m", "http.server", "8080"]
+    ports:
+      - "8080:8080"
+
+  # --- observability (docker compose --profile observability up) ---
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    profiles: ["observability"]
+    volumes:
+      - ../observability/prometheus:/etc/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    profiles: ["observability"]
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    profiles: ["observability"]
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"  # UI
+      - "4317:4317"  # OTLP gRPC
+
+  pushgateway:
+    # Ephemeral batch jobs (scripts/drift_report.py) don't live long enough for
+    # Prometheus to scrape them directly — they push here instead.
+    image: prom/pushgateway:v1.9.0
+    profiles: ["observability"]
+    ports:
+      - "9091:9091"
+
+# One-off maintenance jobs reuse the `match` service's image (it already has
+# scripts/ + every dependency they need) — override its command, don't add it to
+# `up`:
+#   docker compose run --rm match python scripts/reindex_faces.py --m 32 --ef-construct 200
+#   docker compose run --rm match python scripts/drift_report.py --pushgateway-url http://pushgateway:9091
+#   docker compose run --rm match python scripts/shadow_report.py --model-version buffalo_s
+
+volumes:
+  qdrant_data:
+  postgres_data:
+  insightface_models:

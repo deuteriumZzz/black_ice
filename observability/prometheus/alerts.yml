@@ -1,0 +1,38 @@
+groups:
+  - name: black-ice
+    rules:
+      - alert: MatchLatencyP99High
+        expr: histogram_quantile(0.99, sum(rate(black_ice_match_seconds_bucket[5m])) by (le)) > 0.5
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "match decision p99 latency above 500ms"
+
+      - alert: EmbedLatencyP99High
+        expr: histogram_quantile(0.99, sum(rate(black_ice_embed_seconds_bucket[5m])) by (le)) > 1.0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "embedding p99 latency above 1s — check GPU/CPU saturation on embed pods"
+
+      - alert: MatchErrorRateHigh
+        expr: |
+          sum(rate(black_ice_match_decisions_total{result="error"}[5m]))
+          / sum(rate(black_ice_match_decisions_total[5m])) > 0.05
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "over 5% of match decisions are erroring — circuit breaker likely open (Qdrant/Postgres down)"
+
+      - alert: NoFramesIngested
+        expr: sum(rate(black_ice_frames_ingested_total[5m])) == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "no frames ingested in 5m — camera feed or ingest pod is down"
+
+      - alert: MatchScoreDrift
+        expr: black_ice_drift_detected == 1
+        labels: { severity: warning }
+        annotations:
+          summary: "scripts/drift_report.py detected a shift in match-score distribution vs baseline — check model/population/camera changes"

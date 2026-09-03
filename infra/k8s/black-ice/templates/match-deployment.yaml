@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: black-ice-match
+  labels:
+    {{- include "black-ice.componentLabels" (dict "component" "match" "Release" .Release) | nindent 4 }}
+spec:
+  replicas: {{ .Values.match.replicas }}
+  selector:
+    matchLabels: { app: black-ice-match }
+  template:
+    metadata:
+      labels:
+        app: black-ice-match
+        {{- include "black-ice.componentLabels" (dict "component" "match" "Release" .Release) | nindent 8 }}
+    spec:
+      containers:
+        - name: match
+          image: {{ include "black-ice.image" (dict "component" "match" "Values" .Values) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef: { name: black-ice-config }
+            - secretRef: { name: black-ice-secrets }
+          ports:
+            - containerPort: 8000
+              name: http
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 15
+          resources:
+            {{- toYaml .Values.match.resources | nindent 12 }}

@@ -1,0 +1,22 @@
+{{- if .Values.retentionCronJob.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: black-ice-retention-purge
+  labels:
+    {{- include "black-ice.componentLabels" (dict "component" "retention" "Release" .Release) | nindent 4 }}
+spec:
+  schedule: {{ .Values.retentionCronJob.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: purge-expired
+              image: {{ include "black-ice.image" (dict "component" "match" "Values" .Values) }}
+              command: ["python", "scripts/purge_expired.py"]
+              envFrom:
+                - configMapRef: { name: black-ice-config }
+                - secretRef: { name: black-ice-secrets }
+{{- end }}

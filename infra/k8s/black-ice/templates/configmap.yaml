@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: black-ice-config
+  labels:
+    {{- include "black-ice.labels" . | nindent 4 }}
+data:
+  KAFKA_BOOTSTRAP_SERVERS: {{ .Values.connections.kafkaBootstrapServers | quote }}
+  QDRANT_URL: {{ .Values.connections.qdrantUrl | quote }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.connections.otelExporterOtlpEndpoint | quote }}
+  MATCH_THRESHOLD: {{ .Values.matchThreshold | quote }}
+  RETENTION_DAYS: {{ .Values.retentionDays | quote }}
+  SHADOW_EMBEDDING_ENABLED: {{ .Values.shadowEmbedding.enabled | quote }}
+  SHADOW_EMBEDDING_PACK: {{ .Values.shadowEmbedding.pack | quote }}

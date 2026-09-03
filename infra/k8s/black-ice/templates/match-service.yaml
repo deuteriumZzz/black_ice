@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: black-ice-match
+  labels:
+    {{- include "black-ice.componentLabels" (dict "component" "match" "Release" .Release) | nindent 4 }}
+spec:
+  type: {{ .Values.match.service.type }}
+  selector:
+    app: black-ice-match
+  ports:
+    - port: {{ .Values.match.service.port }}
+      targetPort: http
+      name: http

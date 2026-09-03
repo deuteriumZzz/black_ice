@@ -1,0 +1,38 @@
+{
+  "title": "BLACK ICE — pipeline",
+  "uid": "black-ice-pipeline",
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": {"from": "now-15m", "to": "now"},
+  "panels": [
+    {
+      "id": 1, "title": "Frames ingested / s", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(rate(black_ice_frames_ingested_total[1m])) by (camera_id)"}]
+    },
+    {
+      "id": 2, "title": "Faces detected / s", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+      "targets": [{"expr": "sum(rate(black_ice_faces_detected_total[1m])) by (camera_id)"}]
+    },
+    {
+      "id": 3, "title": "Faces embedded / s", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+      "targets": [{"expr": "sum(rate(black_ice_faces_embedded_total[1m])) by (camera_id)"}]
+    },
+    {
+      "id": 4, "title": "Access decisions", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [{"expr": "sum(rate(black_ice_match_decisions_total[1m])) by (result)"}]
+    },
+    {
+      "id": 5, "title": "p99 latency by stage", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {"expr": "histogram_quantile(0.99, sum(rate(black_ice_detect_seconds_bucket[5m])) by (le))", "legendFormat": "detect"},
+        {"expr": "histogram_quantile(0.99, sum(rate(black_ice_embed_seconds_bucket[5m])) by (le))", "legendFormat": "embed"},
+        {"expr": "histogram_quantile(0.99, sum(rate(black_ice_match_seconds_bucket[5m])) by (le))", "legendFormat": "match"}
+      ]
+    }
+  ]
+}

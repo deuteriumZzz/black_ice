@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: black-ice-embed
+  labels:
+    {{- include "black-ice.componentLabels" (dict "component" "embed" "Release" .Release) | nindent 4 }}
+spec:
+  replicas: {{ .Values.embed.replicas }}
+  selector:
+    matchLabels: { app: black-ice-embed }
+  template:
+    metadata:
+      labels:
+        app: black-ice-embed
+        {{- include "black-ice.componentLabels" (dict "component" "embed" "Release" .Release) | nindent 8 }}
+    spec:
+      {{- if .Values.embed.gpu.enabled }}
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      {{- end }}
+      containers:
+        - name: embed
+          image: {{ include "black-ice.image" (dict "component" "embed" "Values" .Values) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef: { name: black-ice-config }
+          ports:
+            - containerPort: 9100
+              name: metrics
+          resources:
+            requests: {{- toYaml .Values.embed.resources.requests | nindent 14 }}
+            limits:
+              {{- toYaml .Values.embed.resources.limits | nindent 14 }}
+              {{- if .Values.embed.gpu.enabled }}
+              nvidia.com/gpu: "1"
+              {{- end }}

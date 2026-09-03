@@ -1,0 +1,22 @@
+{{- if .Values.detect.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: black-ice-detect
+  labels:
+    {{- include "black-ice.componentLabels" (dict "component" "detect" "Release" .Release) | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: black-ice-detect
+  minReplicas: {{ .Values.detect.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.detect.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.detect.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}

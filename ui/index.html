@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BLACK ICE</title>
+<style>
+  :root {
+    --cyan: #00fff2;
+    --magenta: #ff00c8;
+    --lime: #b6ff00;
+    --bg: #05070a;
+    --panel: #0b0f14;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--cyan);
+    font-family: "Courier New", "SF Mono", monospace;
+    padding: 24px;
+  }
+  h1 {
+    font-size: 20px;
+    letter-spacing: 4px;
+    color: var(--magenta);
+    text-shadow: 0 0 8px var(--magenta);
+    margin: 0 0 16px;
+  }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid #1a2530;
+    padding: 16px;
+    box-shadow: 0 0 20px rgba(0, 255, 242, 0.05) inset;
+  }
+  .panel h2 {
+    margin: 0 0 12px;
+    font-size: 13px;
+    letter-spacing: 2px;
+    color: var(--lime);
+    border-bottom: 1px dashed #1a2530;
+    padding-bottom: 8px;
+  }
+  #log {
+    height: 420px;
+    overflow-y: auto;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .line { white-space: pre-wrap; margin-bottom: 2px; }
+  .confirmed { color: var(--lime); }
+  .unknown { color: var(--magenta); }
+  .glitch {
+    animation: glitch 0.25s steps(2) 3;
+  }
+  @keyframes glitch {
+    0% { transform: translateX(0); opacity: 1; }
+    25% { transform: translateX(-2px); opacity: 0.7; }
+    50% { transform: translateX(2px); opacity: 1; }
+    75% { transform: translateX(-1px); opacity: 0.8; }
+    100% { transform: translateX(0); opacity: 1; }
+  }
+  label { display: block; font-size: 11px; margin: 10px 0 4px; color: #6fd; }
+  input[type=text], input[type=password], input[type=file] {
+    width: 100%; background: #000; border: 1px solid #1a2530; color: var(--cyan);
+    font-family: inherit; padding: 6px 8px; font-size: 13px;
+  }
+  button {
+    margin-top: 12px; background: transparent; border: 1px solid var(--lime);
+    color: var(--lime); font-family: inherit; padding: 8px 16px; letter-spacing: 2px;
+    cursor: pointer;
+  }
+  button:hover { background: var(--lime); color: #000; }
+  .progress { height: 4px; background: #111; margin-top: 10px; overflow: hidden; }
+  .progress-bar { height: 100%; width: 0%; background: var(--cyan); transition: width 0.3s; }
+  .status { font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .checkbox-row input { width: auto; }
+</style>
+</head>
+<body>
+  <h1>BLACK ICE // ACCESS CONTROL TERMINAL</h1>
+  <div class="grid">
+    <div class="panel">
+      <h2>LIVE FEED</h2>
+      <div id="log"></div>
+    </div>
+
+    <div class="panel">
+      <h2>MANUAL SCAN</h2>
+
+      <label>MATCH SERVICE URL</label>
+      <input type="text" id="baseUrl" value="http://localhost:8000">
+
+      <label>X-API-KEY</label>
+      <input type="password" id="apiKey" value="dev-admin-key">
+
+      <label>IDENTITY NAME (enroll only)</label>
+      <input type="text" id="identityName" value="Neo">
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="consent">
+        <label style="margin:0">CONSENT GIVEN</label>
+      </div>
+
+      <label>IMAGE</label>
+      <input type="file" id="imageFile" accept="image/*">
+
+      <button onclick="doEnroll()">ENROLL</button>
+      <button onclick="doIdentify()">IDENTIFY</button>
+
+      <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+      <div class="status" id="status"></div>
+    </div>
+  </div>
+
+<script>
+const log = document.getElementById('log');
+
+function appendLine(text, cls, lowConfidence) {
+  const div = document.createElement('div');
+  div.className = 'line ' + (cls || '') + (lowConfidence ? ' glitch' : '');
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function connectLiveFeed() {
+  const base = document.getElementById('baseUrl').value.replace(/^http/, 'ws');
+  const ws = new WebSocket(base + '/ws/live');
+  ws.onopen = () => appendLine('BLACK ICE ACTIVE // LIVE FEED CONNECTED', 'confirmed');
+  ws.onclose = () => { appendLine('LINK SEVERED // RECONNECTING IN 3s', 'unknown'); setTimeout(connectLiveFeed, 3000); };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (evt) => {
+    const data = JSON.parse(evt.data);
+    const confirmed = data.status === 'IDENTITY CONFIRMED';
+    const scorePct = parseFloat(data.match) || 0;
+    const line = `BLACK ICE ACTIVE // CAM:${data.camera_id} TRACK:${data.track_id} // ` +
+      `MATCH: ${data.match} // ${data.status}` + (confirmed ? ` (${data.name})` : '');
+    appendLine(line, confirmed ? 'confirmed' : 'unknown', !confirmed && scorePct > 0);
+  };
+}
+connectLiveFeed();
+
+function setProgress(pct) { document.getElementById('progressBar').style.width = pct + '%'; }
+function setStatus(text, cls) {
+  const el = document.getElementById('status');
+  el.textContent = text;
+  el.className = 'status ' + (cls || '');
+}
+
+async function callApi(path, formData) {
+  const base = document.getElementById('baseUrl').value;
+  const apiKey = document.getElementById('apiKey').value;
+  setProgress(30);
+  try {
+    const res = await fetch(base + path, { method: 'POST', headers: { 'X-API-Key': apiKey }, body: formData });
+    setProgress(100);
+    const body = await res.json();
+    if (!res.ok) {
+      setStatus(`ERROR ${res.status}: ${body.detail || JSON.stringify(body)}`, 'unknown');
+      return;
+    }
+    setStatus(JSON.stringify(body), body.status === 'IDENTITY CONFIRMED' || body.status === 'IDENTITY ENROLLED' ? 'confirmed' : 'unknown');
+    appendLine(`> ${path} :: ${JSON.stringify(body)}`, body.status && body.status.includes('CONFIRMED') ? 'confirmed' : 'unknown');
+  } catch (e) {
+    setStatus('REQUEST FAILED: ' + e, 'unknown');
+    setProgress(0);
+  } finally {
+    setTimeout(() => setProgress(0), 500);
+  }
+}
+
+function doEnroll() {
+  const file = document.getElementById('imageFile').files[0];
+  if (!file) return setStatus('NO IMAGE SELECTED', 'unknown');
+  const fd = new FormData();
+  fd.append('name', document.getElementById('identityName').value);
+  fd.append('consent', document.getElementById('consent').checked);
+  fd.append('file', file);
+  callApi('/enroll', fd);
+}
+
+function doIdentify() {
+  const file = document.getElementById('imageFile').files[0];
+  if (!file) return setStatus('NO IMAGE SELECTED', 'unknown');
+  const fd = new FormData();
+  fd.append('file', file);
+  callApi('/identify', fd);
+}
+</script>
+</body>
+</html>

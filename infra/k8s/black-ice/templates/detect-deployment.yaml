@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: black-ice-detect
+  labels:
+    {{- include "black-ice.componentLabels" (dict "component" "detect" "Release" .Release) | nindent 4 }}
+spec:
+  replicas: {{ .Values.detect.replicas }}
+  selector:
+    matchLabels: { app: black-ice-detect }
+  template:
+    metadata:
+      labels:
+        app: black-ice-detect
+        {{- include "black-ice.componentLabels" (dict "component" "detect" "Release" .Release) | nindent 8 }}
+    spec:
+      containers:
+        - name: detect
+          image: {{ include "black-ice.image" (dict "component" "detect" "Values" .Values) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef: { name: black-ice-config }
+          ports:
+            - containerPort: 9100
+              name: metrics
+          resources:
+            {{- toYaml .Values.detect.resources | nindent 12 }}

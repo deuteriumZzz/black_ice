@@ -1,0 +1,22 @@
+{{- if .Values.driftMonitorCronJob.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: black-ice-drift-monitor
+  labels:
+    {{- include "black-ice.componentLabels" (dict "component" "drift-monitor" "Release" .Release) | nindent 4 }}
+spec:
+  schedule: {{ .Values.driftMonitorCronJob.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: drift-report
+              image: {{ include "black-ice.image" (dict "component" "match" "Values" .Values) }}
+              command: ["python", "scripts/drift_report.py", "--pushgateway-url", {{ .Values.driftMonitorCronJob.pushgatewayUrl | quote }}]
+              envFrom:
+                - configMapRef: { name: black-ice-config }
+                - secretRef: { name: black-ice-secrets }
+{{- end }}

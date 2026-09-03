@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install ruff pytest
+          pip install -r services/ingest/requirements.txt
+          pip install -r services/detect/requirements.txt
+          pip install -r services/embed/requirements.txt
+          pip install -r services/match/requirements.txt
+      - name: Lint (errors + undefined names)
+        run: ruff check . --select F,E9
+      - name: Populate demo frames
+        run: python scripts/fetch_demo_frames.py
+      - name: Unit + integration tests
+        run: python -m pytest tests/unit tests/integration -q
+
+  build-images:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [ingest, detect, embed, match]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ${{ matrix.service }} image
+        run: docker build -f services/${{ matrix.service }}/Dockerfile -t black-ice-${{ matrix.service }}:ci .
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint infra/k8s/black-ice
+      - run: helm template black-ice infra/k8s/black-ice > /tmp/rendered.yaml
+      - name: Validate manifests against Kubernetes schemas (no cluster needed)
+        run: |
+          curl -sSL -o kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar xzf kubeconform.tar.gz
+          ./kubeconform -strict -summary /tmp/rendered.yaml

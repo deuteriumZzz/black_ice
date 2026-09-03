@@ -1,0 +1,81 @@
+# Stateful dependencies (Kafka/Redpanda, Qdrant, Postgres) are NOT bundled in this
+# chart — install them via their own official charts (or point at managed services)
+# and just fill in the connection strings below. Bundling stateful infra into an
+# app chart is exactly the coupling that makes upgrades and backups painful.
+image:
+  registry: ghcr.io/example/black-ice  # replace with your registry
+  tag: latest
+  pullPolicy: IfNotPresent
+
+connections:
+  kafkaBootstrapServers: "redpanda.kafka.svc.cluster.local:9092"
+  qdrantUrl: "http://qdrant.qdrant.svc.cluster.local:6333"
+  databaseUrl: "postgresql+psycopg2://black_ice:black_ice@postgres.postgres.svc.cluster.local:5432/black_ice"
+  otelExporterOtlpEndpoint: "http://jaeger-collector.observability.svc.cluster.local:4317"
+
+matchThreshold: "0.45"
+retentionDays: "90"
+
+# Shadow-mode candidate model evaluation — off by default, zero overhead when off.
+# See libs/black_ice_common/embedding.py and services/match/app/shadow_consumer.py.
+shadowEmbedding:
+  enabled: false
+  pack: "buffalo_s"
+
+apiKeys: "change-me-admin:admin,change-me-operator:operator"  # -> Secret; override per-environment
+
+ingest:
+  cameras:
+    - id: cam-0
+      source: demo
+      fps: "5"
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+detect:
+  replicas: 2
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: "1", memory: 2Gi }
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+
+embed:
+  replicas: 2
+  gpu:
+    enabled: false  # set true + resources.limits["nvidia.com/gpu"]: 1 on a GPU node pool
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: "1", memory: 2Gi }
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+
+match:
+  replicas: 2
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+retentionCronJob:
+  enabled: true
+  schedule: "0 3 * * *"  # daily at 03:00
+
+driftMonitorCronJob:
+  enabled: true
+  schedule: "0 * * * *"  # hourly
+  pushgatewayUrl: "http://pushgateway.observability.svc.cluster.local:9091"
