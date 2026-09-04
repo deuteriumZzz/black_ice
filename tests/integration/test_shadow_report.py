@@ -1,4 +1,4 @@
-from black_ice_common.db import AuditLog
+from black_ice_common.db import AuditLog, Identity
 
 
 def test_shadow_report_counts_agreements_and_disagreements(match_client):
@@ -8,6 +8,12 @@ def test_shadow_report_counts_agreements_and_disagreements(match_client):
     report_module.SessionLocal = db_module.SessionLocal
 
     with db_module.SessionLocal() as session:
+        # identity_id is a real FK now enforced even on sqlite (see db.py) —
+        # these rows must reference actual identities, just like Postgres requires.
+        for name in ("alice", "bob", "carol", "dave"):
+            session.add(Identity(id=name, name=name))
+        session.commit()
+
         # agree: both matched the same identity
         session.add(AuditLog(frame_id="f1", track_id=1, model_version="primary", matched=True, identity_id="alice", score=0.9))
         session.add(AuditLog(frame_id="f1", track_id=1, model_version="buffalo_s", matched=True, identity_id="alice", score=0.8))

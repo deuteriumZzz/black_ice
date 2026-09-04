@@ -4,7 +4,8 @@ import uuid
 
 import cv2
 import numpy as np
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_client import make_asgi_app
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -13,10 +14,10 @@ from slowapi.util import get_remote_address
 from starlette.requests import Request
 
 from black_ice_common.config import settings
-from black_ice_common.db import AuditLog, Identity, SessionLocal, init_db
+import black_ice_common.db as db
 from black_ice_common.decision import is_match
 from black_ice_common.liveness import assess_liveness
-from black_ice_common.rbac import require
+from black_ice_common.rbac import lookup_key, require, seed_from_env
 from black_ice_common.tracing import init_tracing
 from black_ice_common.vectorstore import delete_identity_vectors, ensure_collection, search_face, upsert_face
 from services.match.app.face import largest_face, liveness_engine, shadow_embedder
@@ -28,6 +29,12 @@ limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="BLACK ICE — match")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in settings.cors_allowed_origins.split(",")],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.mount("/metrics", make_asgi_app())
 init_tracing("black-ice-match")
 FastAPIInstrumentor.instrument_app(app)
@@ -35,7 +42,8 @@ FastAPIInstrumentor.instrument_app(app)
 
 @app.on_event("startup")
 def startup() -> None:
-    init_db()
+    db.init_db()
+    seed_from_env()
     ensure_collection()
     if settings.shadow_embedding_enabled:
         ensure_collection(settings.shadow_collection_name)
@@ -83,13 +91,13 @@ def enroll(
         raise HTTPException(422, "NO TARGET ACQUIRED // no face detected")
     bbox, kps, det_score, embedding = found
 
-    with SessionLocal() as session:
+    with db.SessionLocal() as session:
         if identity_id:
-            identity = session.get(Identity, identity_id)
+            identity = session.get(db.Identity, identity_id)
             if identity is None:
                 raise HTTPException(404, "identity not found")
         else:
-            identity = Identity(
+            identity = db.Identity(
                 name=name,
                 consent_given=True,
                 retention_expires_at=datetime.datetime.utcnow() + datetime.timedelta(days=settings.retention_days),
@@ -147,8 +155,8 @@ def identify(request: Request, file: UploadFile = File(...), role: str = Depends
     matched = bool(hits) and is_match(score, settings.match_threshold)
     identity_id = hits[0].payload["identity_id"] if matched else None
 
-    with SessionLocal() as session:
-        session.add(AuditLog(identity_id=identity_id, matched=matched, score=score, requested_by=role))
+    with db.SessionLocal() as session:
+        session.add(db.AuditLog(identity_id=identity_id, matched=matched, score=score, requested_by=role))
         session.commit()
 
     if matched:
@@ -163,9 +171,26 @@ def identify(request: Request, file: UploadFile = File(...), role: str = Depends
 
 
 @app.get("/audit")
-def audit(limit: int = 50, _role: str = Depends(require("audit"))):
-    with SessionLocal() as session:
-        rows = session.query(AuditLog).order_by(AuditLog.ts.desc()).limit(min(limit, 500)).all()
+def audit(
+    limit: int = 50,
+    offset: int = 0,
+    camera_id: str | None = None,
+    identity_id: str | None = None,
+    from_ts: datetime.datetime | None = None,
+    to_ts: datetime.datetime | None = None,
+    _role: str = Depends(require("audit")),
+):
+    with db.SessionLocal() as session:
+        query = session.query(db.AuditLog)
+        if camera_id:
+            query = query.filter(db.AuditLog.camera_id == camera_id)
+        if identity_id:
+            query = query.filter(db.AuditLog.identity_id == identity_id)
+        if from_ts:
+            query = query.filter(db.AuditLog.ts >= from_ts)
+        if to_ts:
+            query = query.filter(db.AuditLog.ts <= to_ts)
+        rows = query.order_by(db.AuditLog.ts.desc()).offset(offset).limit(min(limit, 500)).all()
         return [
             {
                 "ts": r.ts.isoformat(),
@@ -179,14 +204,39 @@ def audit(limit: int = 50, _role: str = Depends(require("audit"))):
         ]
 
 
+@app.get("/identities")
+def list_identities(limit: int = 50, offset: int = 0, _role: str = Depends(require("enroll"))):
+    with db.SessionLocal() as session:
+        rows = session.query(db.Identity).order_by(db.Identity.created_at.desc()).offset(offset).limit(min(limit, 500)).all()
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "created_at": r.created_at.isoformat(),
+                "consent_given": r.consent_given,
+                "retention_expires_at": r.retention_expires_at.isoformat() if r.retention_expires_at else None,
+            }
+            for r in rows
+        ]
+
+
+@app.post("/auth/login")
+@limiter.limit(settings.rate_limit)
+def login(request: Request, x_api_key: str = Header(...)):
+    found = lookup_key(x_api_key)
+    if found is None:
+        raise HTTPException(401, "invalid API key")
+    return {"role": found.role, "label": found.label}
+
+
 @app.delete("/identities/{identity_id}")
 def revoke_identity(identity_id: str, _role: str = Depends(require("enroll"))):
     """Consent revocation / right to erasure: removes the identity row and every
     embedding enrolled under it. Audit log rows are untouched — they only carry an
     identity_id foreign key, not biometric data, and stay meaningful for compliance
     review after the identity itself is gone."""
-    with SessionLocal() as session:
-        identity = session.get(Identity, identity_id)
+    with db.SessionLocal() as session:
+        identity = session.get(db.Identity, identity_id)
         if identity is None:
             raise HTTPException(404, "identity not found")
         session.delete(identity)

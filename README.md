@@ -69,7 +69,8 @@ docker compose --profile observability up -d   # + prometheus, grafana, jaeger
 ```
 
 - Match API: `http://localhost:8000` (документация на `/docs`, метрики на `/metrics`)
-- Netrunner UI: `http://localhost:8080`
+- Netrunner UI (демо): `http://localhost:8080`
+- Admin-консоль: `http://localhost:5174` (или `cd admin-ui && npm run dev` → `:5173`) — см. [admin-ui/README.md](admin-ui/README.md)
 - Grafana: `http://localhost:3000` (анонимный admin) · Prometheus: `:9090` · Jaeger: `:16686`
 
 Демо-режим (`SOURCE=demo` у ingest) зацикливает один вшитый тестовый снимок как
@@ -115,6 +116,44 @@ python -m pytest tests/unit tests/integration -q
 0.97 вместо >0.999), обрезая выравнивающий warp ArcFace.
 
 Нагрузочный тест: `locust -f tests/load/locustfile.py --host http://localhost:8000`.
+
+## Admin-консоль (Фаза 1, Milestone 1)
+
+`admin-ui/` — React/TS/Vite/Tailwind SPA, полноценная операционная консоль
+вместо curl и одностраничного demo (`ui/index.html`, который остаётся
+отдельно, никуда не делся). Подробности — [admin-ui/README.md](admin-ui/README.md).
+
+Потребовало реальных изменений в бэкенде, не только фронт:
+- **RBAC переведён с env var на БД**: новая таблица `ApiKey`
+  ([libs/black_ice_common/db.py](libs/black_ice_common/db.py)) вместо парсинга
+  `BLACK_ICE_API_KEYS` на каждый запрос. `BLACK_ICE_API_KEYS` не исчез — он
+  теперь одноразовый bootstrap-сид при пустой таблице, так что старые
+  compose/K8s-конфиги продолжают работать без изменений (проверено — все
+  существующие тесты прошли без единой правки после миграции)
+- Новые эндпоинты: `POST /auth/login`, `GET /identities`, фильтры/пагинация у
+  `GET /audit` (`camera_id`/`identity_id`/`from_ts`/`to_ts`/`offset`)
+- CORS-мидлварь (`CORS_ALLOWED_ORIGINS`) — раньше не был нужен, у API не было
+  браузерного клиента
+
+**Реальный баг, пойманный именно этой работой, не найденный ни разу за всю
+предыдущую сессию**: `DELETE /identities/{id}` был сломан на настоящем
+Postgres — падал с `ForeignKeyViolation`, если у личности была хоть одна
+запись в `audit_log`. Все 42 прошлых теста были зелёными, потому что sqlite
+по умолчанию не проверяет foreign key constraints вообще. Исправлено: (1)
+`audit_log.identity_id` теперь `ON DELETE SET NULL` (сохраняет доку, ровно
+как обещал докстринг), (2) в `db.py` добавлен listener, включающий
+`PRAGMA foreign_keys=ON` для sqlite-соединений — то же самое немедленно
+поймало ВТОРОЙ такой же баг в тесте `test_shadow_report.py` (фейковые
+`identity_id`, не существующие в таблице `identities`). Оба зафиксированы
+регрессионными тестами
+([tests/integration/test_revoke_with_audit_history.py](tests/integration/test_revoke_with_audit_history.py)).
+
+Проверено вживую (не sqlite): логин, dashboard с live-фидом через
+`/ws/live`, enroll → identify → revoke через реальные Postgres+Qdrant
+контейнеры, и RBAC-граница — роль без прав видит явное сообщение
+"нет доступа", а не молча пустую таблицу (тоже реальный баг, найденный и
+исправленный по ходу — TanStack Query по умолчанию ретраит 401/403 несколько
+секунд, отсюда была "тишина" вместо ошибки).
 
 ## Kubernetes / Helm
 
@@ -277,11 +316,10 @@ equal-error-rate, строит кривые ROC + DET. Сама математи
   выполняется в процессе внутри `detect`, а не как отдельный сервис через
   Kafka — ему нужно плотное покадровое состояние на камеру, и сетевой хоп
   тут только замедлил бы дело.
-- **Параметры HNSW/шардов не проверены на настоящем Qdrant-сервере**:
-  механика переключения алиаса при re-index полностью протестирована; реальный
-  эффект кастомных `m`/`ef_construct`/числа шардов на recall/латентность —
-  нет, потому что local/embedded-режим Qdrant их молча игнорирует. См. раздел
-  Observability.
+- **HNSW/re-index** — механика alias-swap и сами параметры (`m`/`ef_construct`)
+  проверены на настоящем Qdrant-сервере (см. [PHASE0_RESULTS.md](PHASE0_RESULTS.md));
+  не проверен реальный эффект на recall/латентность под нагрузкой — это уже
+  отдельный вопрос тюнинга, не механики.
 - **Liveness / template protection**: у liveness теперь есть настоящая точка
   подключения обученной модели, но сама обученная модель не поставляется (см.
   раздел Security); model-inversion/template-protection — по-прежнему только
@@ -296,7 +334,8 @@ black-ice/
 ├── infra/{docker-compose.yml,k8s/black-ice/}        — compose-стек + Helm-чарт
 ├── observability/{prometheus,grafana}/              — конфиг скрейпа, алерты, дашборды
 ├── ml/eval/                                         — калибровка ROC/FAR-FRR
-├── ui/index.html                                    — netrunner-стилизованный живой терминал + ручной скан
+├── ui/index.html                                    — netrunner-стилизованный демо: терминал + ручной скан
+├── admin-ui/                                         — React-консоль для операторов (Фаза 1) — см. admin-ui/README.md
 ├── scripts/                                         — фетч демо-кадров, чистка по retention, reindex, отчёты drift/shadow
 ├── tests/{unit,integration,load}/
 └── .github/workflows/ci.yml                         — lint, тесты, сборка каждого образа, helm lint+validate

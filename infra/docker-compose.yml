@@ -105,6 +105,16 @@ services:
     ports:
       - "8080:8080"
 
+  admin-ui:
+    build:
+      context: ../admin-ui
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "5174:80"
+    depends_on:
+      - match
+
   # --- observability (docker compose --profile observability up) ---
   prometheus:
     image: prom/prometheus:v2.55.1

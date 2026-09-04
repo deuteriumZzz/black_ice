@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     breaker_fail_max: int = 5
     breaker_reset_timeout_s: int = 30
 
+    # CORS — the admin-ui SPA (services/match serves the API only, not the
+    # frontend) runs on its own origin. Comma-separated list. 5173 = vite dev
+    # server, 5174 = the admin-ui container's published port in compose.
+    cors_allowed_origins: str = "http://localhost:5173,http://localhost:5174"
+
     # Compliance
     retention_days: int = 90
 
