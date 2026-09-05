@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     qdrant_shard_number: int = 1  # >1 shards the collection across Qdrant's storage, for horizontal scale
     database_url: str = "postgresql+psycopg2://black_ice:black_ice@localhost:5432/black_ice"
 
+    # Template protection (see libs/black_ice_common/template_protection.py) —
+    # model-inversion mitigation, opt-in. Off by default: enabling it changes
+    # every stored vector's coordinate space, so it's an enrollment-time
+    # decision, not something to flip on an existing gallery without a full
+    # re-enroll.
+    template_protection_enabled: bool = False
+    template_protection_seed: str | None = None
+
     # Decisioning
     match_threshold: float = 0.45  # cosine similarity; below this = "unknown"
 
@@ -48,6 +56,12 @@ class Settings(BaseSettings):
     # SOURCE=demo mode, which stays fully env-driven — see services/ingest/main.py).
     match_api_url: str = "http://localhost:8000"
     heartbeat_interval_s: float = 5.0
+    # Sent as X-API-Key on the two calls above — scoped "ingest" role (see
+    # rbac.ROLES), not admin/operator. Every ingest process shares one key
+    # (they only ever read their own config/report their own heartbeat, so a
+    # per-camera key wouldn't reduce blast radius) resolved via secrets.py
+    # like other credentials.
+    ingest_api_key: str = "dev-ingest-key"
 
     # Tracking / frame sampling (see services/tracking) — avoids re-embedding a
     # static face on every frame
@@ -99,6 +113,13 @@ class Settings(BaseSettings):
     ingest_image: str = "infra-ingest:latest"
     orchestrator_docker_network: str | None = None  # None = auto-detect match's own network
     k8s_namespace: str = "default"
+    # Name of the K8s Secret dynamically-created ingest Deployments pull
+    # INGEST_API_KEY (and friends) from — "black-ice-secrets" normally, or
+    # whatever vault.vaultTokenSecretRef names when Vault mode is on (see
+    # _helpers.tpl's secretsEnvFrom, which this mirrors at runtime since a
+    # running pod can't re-evaluate a Helm template). Set via the ConfigMap,
+    # not hardcoded, so it stays in sync with whichever mode the chart deployed in.
+    k8s_secrets_source_name: str = "black-ice-secrets"
 
     # Real IdP (see libs/black_ice_common/oidc.py) — replaces static API keys
     # when set to "oidc". Built and verified against Keycloak; any standards-
@@ -123,3 +144,5 @@ settings = Settings()
 # Vault override, opt-in (see secrets.py) — a no-op when VAULT_ADDR isn't set,
 # so plain env vars/`.env` keep working unchanged for local dev/compose.
 settings.database_url = get_secret("DATABASE_URL", default=settings.database_url)
+settings.ingest_api_key = get_secret("INGEST_API_KEY", default=settings.ingest_api_key)
+settings.template_protection_seed = get_secret("TEMPLATE_PROTECTION_SEED", default=settings.template_protection_seed)

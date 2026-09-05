@@ -66,6 +66,7 @@ def _deploy_docker(camera_id: str) -> None:
             "SOURCE": "camera-registry",  # sentinel: routes ingest to the registry lookup, see module docstring
             "KAFKA_BOOTSTRAP_SERVERS": settings.kafka_bootstrap_servers,
             "MATCH_API_URL": settings.match_api_url,
+            "INGEST_API_KEY": settings.ingest_api_key,
         },
     )
     log.info("deployed ingest container %s on network %s", name, network)
@@ -106,7 +107,10 @@ def _deploy_kubernetes(camera_id: str) -> None:
                         k8s.V1Container(
                             name="ingest",
                             image=settings.ingest_image,
-                            env_from=[k8s.V1EnvFromSource(config_map_ref=k8s.V1ConfigMapEnvSource(name="black-ice-config"))],
+                            env_from=[
+                                k8s.V1EnvFromSource(config_map_ref=k8s.V1ConfigMapEnvSource(name="black-ice-config")),
+                                k8s.V1EnvFromSource(secret_ref=k8s.V1SecretEnvSource(name=settings.k8s_secrets_source_name)),
+                            ],
                             env=[
                                 k8s.V1EnvVar(name="CAMERA_ID", value=camera_id),
                                 k8s.V1EnvVar(name="SOURCE", value="camera-registry"),

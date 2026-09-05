@@ -23,6 +23,7 @@ shadowEmbedding:
   pack: "buffalo_s"
 
 apiKeys: "change-me-admin:admin,change-me-operator:operator"  # -> Secret; override per-environment
+ingestApiKey: "change-me-ingest"  # every ingest pod's own X-API-Key (role "ingest") — same key everywhere, not per-camera
 
 # Real IdP (libs/black_ice_common/oidc.py), opt-in. When "oidc", match
 # validates a Bearer JWT against issuerUrl instead of X-API-Key/apiKeys
@@ -38,6 +39,15 @@ auth:
   oidc:
     issuerUrl: "https://idp.example.com/realms/black-ice"
     discoveryUrl: ""  # "" = same as issuerUrl
+
+# Template protection (libs/black_ice_common/template_protection.py) — model-
+# inversion mitigation, opt-in. seed lives in the Secret, not here (never put
+# a real one in values.yaml). Enabling this on a gallery that already has
+# real enrollments needs a full re-enroll — every stored vector's coordinate
+# space changes, old and new vectors become incomparable to each other.
+templateProtection:
+  enabled: false
+  seed: "change-me-template-protection-seed"
 
 # Vault-backed secrets (libs/black_ice_common/secrets.py), opt-in. When enabled,
 # this chart stops rendering databaseUrl/apiKeys into a plaintext K8s Secret —

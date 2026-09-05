@@ -55,17 +55,24 @@ def _capture_frames(source: str):
         yield frame
 
 
+def _auth_headers() -> dict[str, str]:
+    return {"X-API-Key": settings.ingest_api_key}
+
+
 def _resolve_config(camera_id: str) -> tuple[str, float]:
     """Fetches (source, ingest_fps) from match's camera registry. Retries a
     handful of times for transient failures (match still starting up) but
     fails hard on 404/403 — a misconfigured camera silently capturing the
     wrong source, or a disabled one capturing at all, is worse than a
-    container that crashes loudly and gets noticed."""
+    container that crashes loudly and gets noticed. 403 can now also mean a
+    wrong/missing INGEST_API_KEY (see rbac.ROLES's "ingest" role), not just a
+    disabled camera — the error message below reflects whichever the response
+    body actually says, instead of assuming it's always the camera."""
     url = f"{settings.match_api_url}/cameras/{camera_id}/config"
     last_error: Exception | None = None
     for attempt in range(3):
         try:
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, headers=_auth_headers(), timeout=5)
         except requests.RequestException as exc:
             last_error = exc
             log.warning("camera config fetch failed (attempt %d/3): %s", attempt + 1, exc)
@@ -73,8 +80,9 @@ def _resolve_config(camera_id: str) -> tuple[str, float]:
             continue
         if resp.status_code == 404:
             raise RuntimeError(f"camera '{camera_id}' is not registered — add it via the admin console first")
-        if resp.status_code == 403:
-            raise RuntimeError(f"camera '{camera_id}' is registered but disabled")
+        if resp.status_code in (401, 403):
+            detail = resp.json().get("detail", resp.text)
+            raise RuntimeError(f"camera '{camera_id}' config request denied ({resp.status_code}): {detail}")
         resp.raise_for_status()
         data = resp.json()
         return data["source"], data["ingest_fps"]
@@ -85,7 +93,7 @@ def _heartbeat_loop(camera_id: str) -> None:
     url = f"{settings.match_api_url}/cameras/{camera_id}/heartbeat"
     while True:
         try:
-            requests.post(url, timeout=5)
+            requests.post(url, headers=_auth_headers(), timeout=5)
         except requests.RequestException as exc:
             log.warning("heartbeat failed: %s", exc)
         time.sleep(settings.heartbeat_interval_s)

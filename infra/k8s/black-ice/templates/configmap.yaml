@@ -23,6 +23,10 @@ data:
   ORCHESTRATOR_BACKEND: {{ .Values.orchestratorBackend | quote }}
   INGEST_IMAGE: {{ include "black-ice.image" (dict "component" "ingest" "Values" .Values) | quote }}
   K8S_NAMESPACE: {{ .Release.Namespace | quote }}
+  # Lets ingest_orchestrator.py's kubernetes backend give a dynamically-created
+  # ingest Deployment the right envFrom secretRef at runtime — a Secret NAME
+  # isn't sensitive, only its contents are, so this is safe in a ConfigMap.
+  K8S_SECRETS_SOURCE_NAME: {{ if .Values.vault.enabled }}{{ .Values.vault.vaultTokenSecretRef | quote }}{{ else }}"black-ice-secrets"{{ end }}
   AUTH_BACKEND: {{ .Values.auth.backend | quote }}
   {{- if eq .Values.auth.backend "oidc" }}
   OIDC_ISSUER_URL: {{ .Values.auth.oidc.issuerUrl | quote }}
@@ -30,3 +34,4 @@ data:
   OIDC_DISCOVERY_URL: {{ .Values.auth.oidc.discoveryUrl | quote }}
   {{- end }}
   {{- end }}
+  TEMPLATE_PROTECTION_ENABLED: {{ .Values.templateProtection.enabled | quote }}

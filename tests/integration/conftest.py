@@ -9,7 +9,7 @@ import pytest
 
 @pytest.fixture()
 def match_client(tmp_path, monkeypatch):
-    monkeypatch.setenv("BLACK_ICE_API_KEYS", "admin-key:admin,op-key:operator")
+    monkeypatch.setenv("BLACK_ICE_API_KEYS", "admin-key:admin,op-key:operator,ingest-key:ingest")
     monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:19092")
 
     import black_ice_common.config as config

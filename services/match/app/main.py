@@ -360,11 +360,12 @@ def delete_camera(id: str, _role: str = Depends(require("cameras"))):
 
 
 @app.get("/cameras/{camera_id}/config")
-def camera_config(camera_id: str):
-    """Called by ingest at startup to resolve its own capture config — not
-    behind require() because ingest has no API key today (see README's
-    security gaps: service-to-service auth is a Phase 4 item, not solved
-    here). Deliberately returns only capture-config fields, nothing else."""
+def camera_config(camera_id: str, _role: str = Depends(require("camera_self_config"))):
+    """Called by ingest at startup to resolve its own capture config — behind
+    the scoped "ingest" role (see rbac.ROLES), not admin/operator, since an
+    ingest process should only ever be able to read its own config/report its
+    own heartbeat, nothing else. Deliberately returns only capture-config
+    fields, even to a caller with the right role."""
     with db.SessionLocal() as session:
         camera = session.query(db.Camera).filter(db.Camera.camera_id == camera_id).first()
         if camera is None:
@@ -375,7 +376,7 @@ def camera_config(camera_id: str):
 
 
 @app.post("/cameras/{camera_id}/heartbeat")
-def camera_heartbeat(camera_id: str):
+def camera_heartbeat(camera_id: str, _role: str = Depends(require("camera_self_config"))):
     with db.SessionLocal() as session:
         camera = session.query(db.Camera).filter(db.Camera.camera_id == camera_id).first()
         if camera is None:

@@ -39,20 +39,29 @@ def test_camera_crud_and_rbac(match_client):
     assert match_client.get("/cameras", headers={"X-API-Key": "admin-key"}).json() == []
 
 
-def test_camera_config_endpoint_is_unauthenticated_but_scoped(match_client):
+def test_camera_config_endpoint_requires_ingest_role(match_client):
     match_client.post(
         "/cameras",
         json={"camera_id": "cam-0", "name": "Front door", "source": "rtsp://front", "ingest_fps": 7.5},
         headers={"X-API-Key": "admin-key"},
     )
 
-    # no X-API-Key at all — this is the point, ingest has none
+    # no X-API-Key at all — must be rejected, not treated as an open endpoint
     r = match_client.get("/cameras/cam-0/config")
+    assert r.status_code == 401
+
+    # admin/operator keys aren't the "ingest" role and must not work here either
+    r = match_client.get("/cameras/cam-0/config", headers={"X-API-Key": "admin-key"})
+    assert r.status_code == 403
+    r = match_client.get("/cameras/cam-0/config", headers={"X-API-Key": "op-key"})
+    assert r.status_code == 403
+
+    r = match_client.get("/cameras/cam-0/config", headers={"X-API-Key": "ingest-key"})
     assert r.status_code == 200
     assert r.json() == {"source": "rtsp://front", "ingest_fps": 7.5}
     assert "name" not in r.json(), "config endpoint must not leak fields beyond capture config"
 
-    r = match_client.get("/cameras/does-not-exist/config")
+    r = match_client.get("/cameras/does-not-exist/config", headers={"X-API-Key": "ingest-key"})
     assert r.status_code == 404
 
 
@@ -65,21 +74,26 @@ def test_disabled_camera_config_is_rejected(match_client):
     camera_row_id = r.json()["id"]
     match_client.patch(f"/cameras/{camera_row_id}", json={"enabled": False}, headers={"X-API-Key": "admin-key"})
 
-    r = match_client.get("/cameras/cam-1/config")
+    r = match_client.get("/cameras/cam-1/config", headers={"X-API-Key": "ingest-key"})
     assert r.status_code == 403
 
 
-def test_heartbeat_updates_last_seen(match_client):
+def test_heartbeat_requires_ingest_role_and_updates_last_seen(match_client):
     match_client.post(
         "/cameras", json={"camera_id": "cam-2", "name": "Side", "source": "0"}, headers={"X-API-Key": "admin-key"}
     )
 
     r = match_client.post("/cameras/cam-2/heartbeat")
+    assert r.status_code == 401
+    r = match_client.post("/cameras/cam-2/heartbeat", headers={"X-API-Key": "admin-key"})
+    assert r.status_code == 403
+
+    r = match_client.post("/cameras/cam-2/heartbeat", headers={"X-API-Key": "ingest-key"})
     assert r.status_code == 200
 
     r = match_client.get("/cameras", headers={"X-API-Key": "admin-key"})
     row = next(c for c in r.json() if c["camera_id"] == "cam-2")
     assert row["last_seen_at"] is not None
 
-    r = match_client.post("/cameras/does-not-exist/heartbeat")
+    r = match_client.post("/cameras/does-not-exist/heartbeat", headers={"X-API-Key": "ingest-key"})
     assert r.status_code == 404

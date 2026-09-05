@@ -26,6 +26,7 @@ spec:
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           envFrom:
             - configMapRef: { name: black-ice-config }
+            {{- include "black-ice.secretsEnvFrom" $ | nindent 12 }}
           env:
             - name: CAMERA_ID
               value: {{ .id | quote }}

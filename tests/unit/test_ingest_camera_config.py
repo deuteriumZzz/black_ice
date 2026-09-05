@@ -35,10 +35,29 @@ def test_resolve_config_raises_on_404_without_retrying():
 
 @responses.activate
 def test_resolve_config_raises_on_403_without_retrying():
-    responses.get("http://match-test/cameras/disabled/config", status=403)
+    responses.get("http://match-test/cameras/disabled/config", json={"detail": "camera is disabled"}, status=403)
     with pytest.raises(RuntimeError, match="disabled"):
         _resolve_config("disabled")
     assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_resolve_config_raises_on_401_without_retrying():
+    """A wrong/missing INGEST_API_KEY is a distinct failure from a disabled
+    camera (see rbac.ROLES's "ingest" role) — both are now possible on this
+    call, and neither should be silently retried."""
+    responses.get("http://match-test/cameras/cam-0/config", json={"detail": "invalid API key"}, status=401)
+    with pytest.raises(RuntimeError, match="invalid API key"):
+        _resolve_config("cam-0")
+    assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_resolve_config_sends_ingest_api_key(monkeypatch):
+    monkeypatch.setattr(settings, "ingest_api_key", "test-ingest-key")
+    responses.get("http://match-test/cameras/cam-0/config", json={"source": "0", "ingest_fps": 5.0}, status=200)
+    _resolve_config("cam-0")
+    assert responses.calls[0].request.headers["X-API-Key"] == "test-ingest-key"
 
 
 @responses.activate

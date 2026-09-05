@@ -28,6 +28,11 @@ ROLES = {
     "admin": {"enroll", "identify", "audit", "cameras", "access_rules", "alert_rules"},
     "operator": {"identify"},
     "viewer": set(),
+    # Scoped to exactly what an ingest process needs about itself — its own
+    # capture config and heartbeat — nothing else. Closes the gap these two
+    # endpoints used to run without any RBAC at all (see camera_config's/
+    # camera_heartbeat's history in services/match/app/main.py).
+    "ingest": {"camera_self_config"},
 }
 
 
@@ -53,7 +58,7 @@ def seed_from_env() -> None:
     with db.SessionLocal() as session:
         if session.query(db.ApiKey).first() is not None:
             return
-        raw = get_secret("BLACK_ICE_API_KEYS", default="dev-admin-key:admin,dev-operator-key:operator")
+        raw = get_secret("BLACK_ICE_API_KEYS", default="dev-admin-key:admin,dev-operator-key:operator,dev-ingest-key:ingest")
         for pair in raw.split(","):
             key, role = pair.split(":")
             session.add(db.ApiKey(key_hash=hash_key(key.strip()), role=role.strip(), label="seeded-from-env"))

@@ -11,6 +11,11 @@ x-python-env: &python-env
   SHADOW_EMBEDDING_ENABLED: "false"
   # Where ingest fetches its camera config from (skipped when SOURCE=demo).
   MATCH_API_URL: http://match:8000
+  # Model-inversion mitigation (libs/black_ice_common/template_protection.py),
+  # opt-in. Set TEMPLATE_PROTECTION_ENABLED=true + TEMPLATE_PROTECTION_SEED=...
+  # in .env to turn it on — off by default so a fresh gallery isn't required
+  # for local dev.
+  TEMPLATE_PROTECTION_ENABLED: "false"
 
 services:
   # --- infra ---
@@ -66,6 +71,7 @@ services:
       CAMERA_ID: cam-0
       SOURCE: demo
       INGEST_FPS: "5"
+      INGEST_API_KEY: dev-ingest-key
     depends_on:
       - redpanda
 
@@ -97,7 +103,7 @@ services:
       dockerfile: services/match/Dockerfile
     environment:
       <<: *python-env
-      BLACK_ICE_API_KEYS: "dev-admin-key:admin,dev-operator-key:operator"
+      BLACK_ICE_API_KEYS: "dev-admin-key:admin,dev-operator-key:operator,dev-ingest-key:ingest"
     ports:
       - "8000:8000"
     depends_on:

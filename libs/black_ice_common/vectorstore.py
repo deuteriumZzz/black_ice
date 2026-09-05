@@ -13,6 +13,7 @@ from qdrant_client.models import (
 )
 
 from black_ice_common.config import settings
+from black_ice_common.template_protection import protect
 
 client = QdrantClient(url=settings.qdrant_url)
 
@@ -51,16 +52,20 @@ def ensure_collection(collection: str | None = None) -> None:
 
 
 def upsert_face(point_id: str, embedding, identity_id: str, name: str, collection: str | None = None) -> None:
+    """`protect()` is a no-op unless template_protection_enabled — applied
+    here (and in search_face) so every write path (/enroll, the shadow
+    gallery, reindex_faces.py) transforms consistently without each caller
+    needing to remember to."""
     client.upsert(
         collection_name=collection or settings.collection_name,
-        points=[PointStruct(id=point_id, vector=embedding.tolist(), payload={"identity_id": identity_id, "name": name})],
+        points=[PointStruct(id=point_id, vector=protect(embedding).tolist(), payload={"identity_id": identity_id, "name": name})],
     )
 
 
 def search_face(embedding, limit: int = 1, collection: str | None = None):
     return client.query_points(
         collection_name=collection or settings.collection_name,
-        query=embedding.tolist(),
+        query=protect(embedding).tolist(),
         limit=limit,
         search_params=SearchParams(hnsw_ef=settings.hnsw_ef_search),
     ).points

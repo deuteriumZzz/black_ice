@@ -4,3 +4,19 @@ __pycache__/
 .venv/
 .venv-common/
 *.db
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# AI coding-assistant tool state (local only, not part of the project)
+.claude/
+.serena/
+.cursor/
+CLAUDE.md

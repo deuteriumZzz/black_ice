@@ -5,9 +5,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv
+ENV PIP_DEFAULT_TIMEOUT=180 PIP_RETRIES=5
 
 COPY services/match/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --default-timeout=180 --retries 5 -r requirements.txt
 
 COPY libs ./libs
 COPY services/match ./services/match
