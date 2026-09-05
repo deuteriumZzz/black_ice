@@ -1,0 +1,37 @@
+{{- if eq .Values.orchestratorBackend "kubernetes" }}
+# Least-privilege for ingest_orchestrator.py's kubernetes backend: match can
+# only manage Deployments (create/get/delete/update, no other resource, no
+# other verb) in its own namespace — not a cluster-wide grant.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: black-ice-match
+  labels:
+    {{- include "black-ice.componentLabels" (dict "component" "match" "Release" .Release) | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: black-ice-ingest-orchestrator
+  labels:
+    {{- include "black-ice.componentLabels" (dict "component" "match" "Release" .Release) | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "delete", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: black-ice-ingest-orchestrator
+  labels:
+    {{- include "black-ice.componentLabels" (dict "component" "match" "Release" .Release) | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: black-ice-match
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: black-ice-ingest-orchestrator
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

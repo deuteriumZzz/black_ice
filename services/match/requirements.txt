@@ -18,3 +18,7 @@ opentelemetry-sdk==1.27.0
 opentelemetry-exporter-otlp-proto-grpc==1.27.0
 opentelemetry-instrumentation-fastapi==0.48b0
 scipy==1.13.1
+requests==2.32.3
+docker==7.1.0
+kubernetes==31.0.0
+PyJWT[crypto]==2.9.0

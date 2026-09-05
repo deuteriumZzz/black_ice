@@ -1,0 +1,16 @@
+{{- if .Values.backupCronJob.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: black-ice-backups
+  labels:
+    {{- include "black-ice.componentLabels" (dict "component" "backup" "Release" .Release) | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.backupCronJob.storageClassName }}
+  storageClassName: {{ .Values.backupCronJob.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backupCronJob.storageSize | quote }}
+{{- end }}

@@ -3,7 +3,10 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { Layout } from '@/components/Layout'
 import { useAuth } from '@/contexts/AuthContext'
 import { LiveFeedProvider } from '@/contexts/LiveFeedContext'
+import { AccessRulesPage } from '@/pages/AccessRules'
+import { AlertRulesPage } from '@/pages/AlertRules'
 import { AuditPage } from '@/pages/Audit'
+import { CamerasPage } from '@/pages/Cameras'
 import { DashboardPage } from '@/pages/Dashboard'
 import { IdentitiesPage } from '@/pages/Identities'
 import { LoginPage } from '@/pages/Login'
@@ -26,6 +29,9 @@ export default function App() {
       <Route element={<ProtectedLayout />}>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/identities" element={<IdentitiesPage />} />
+        <Route path="/cameras" element={<CamerasPage />} />
+        <Route path="/access-rules" element={<AccessRulesPage />} />
+        <Route path="/alert-rules" element={<AlertRulesPage />} />
         <Route path="/audit" element={<AuditPage />} />
       </Route>
     </Routes>

@@ -1,4 +1,4 @@
-import { Activity, LogOut, ScrollText, Users } from 'lucide-react'
+import { Activity, Bell, Camera, LogOut, ScrollText, ShieldCheck, Users } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
 
 import { useAuth } from '@/contexts/AuthContext'
@@ -8,6 +8,9 @@ import { cn } from '@/lib/utils'
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', icon: Activity },
   { to: '/identities', label: 'Identities', icon: Users },
+  { to: '/cameras', label: 'Cameras', icon: Camera },
+  { to: '/access-rules', label: 'Access rules', icon: ShieldCheck },
+  { to: '/alert-rules', label: 'Alert rules', icon: Bell },
   { to: '/audit', label: 'Audit log', icon: ScrollText },
 ]
 

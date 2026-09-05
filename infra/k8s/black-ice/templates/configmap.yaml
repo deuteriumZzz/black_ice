@@ -7,8 +7,26 @@ metadata:
 data:
   KAFKA_BOOTSTRAP_SERVERS: {{ .Values.connections.kafkaBootstrapServers | quote }}
   QDRANT_URL: {{ .Values.connections.qdrantUrl | quote }}
+  # Pre-existing gap fixed alongside ingest_orchestrator.py: without this, every
+  # ingest pod (static ingest.cameras entries AND dynamically-orchestrated ones)
+  # fell back to Settings' localhost:8000 default, which isn't reachable from a pod.
+  MATCH_API_URL: {{ printf "http://black-ice-match:%v" .Values.match.service.port | quote }}
   OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.connections.otelExporterOtlpEndpoint | quote }}
   MATCH_THRESHOLD: {{ .Values.matchThreshold | quote }}
   RETENTION_DAYS: {{ .Values.retentionDays | quote }}
   SHADOW_EMBEDDING_ENABLED: {{ .Values.shadowEmbedding.enabled | quote }}
   SHADOW_EMBEDDING_PACK: {{ .Values.shadowEmbedding.pack | quote }}
+  {{- if .Values.vault.enabled }}
+  VAULT_ADDR: {{ .Values.vault.addr | quote }}
+  VAULT_KV_PATH: {{ .Values.vault.kvPath | quote }}
+  {{- end }}
+  ORCHESTRATOR_BACKEND: {{ .Values.orchestratorBackend | quote }}
+  INGEST_IMAGE: {{ include "black-ice.image" (dict "component" "ingest" "Values" .Values) | quote }}
+  K8S_NAMESPACE: {{ .Release.Namespace | quote }}
+  AUTH_BACKEND: {{ .Values.auth.backend | quote }}
+  {{- if eq .Values.auth.backend "oidc" }}
+  OIDC_ISSUER_URL: {{ .Values.auth.oidc.issuerUrl | quote }}
+  {{- if .Values.auth.oidc.discoveryUrl }}
+  OIDC_DISCOVERY_URL: {{ .Values.auth.oidc.discoveryUrl | quote }}
+  {{- end }}
+  {{- end }}

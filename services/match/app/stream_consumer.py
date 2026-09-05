@@ -4,6 +4,8 @@ import threading
 import numpy as np
 from pybreaker import CircuitBreaker, CircuitBreakerError
 
+from black_ice_common.access_rules import is_access_allowed
+from black_ice_common.alerting import fire_alert
 from black_ice_common.config import settings
 from black_ice_common.decisioning import evaluate_embedding
 from black_ice_common.kafka_io import get_consumer, iter_messages
@@ -22,8 +24,21 @@ breaker = CircuitBreaker(fail_max=settings.breaker_fail_max, reset_timeout=setti
 @breaker
 def _search_and_log(msg: EmbeddingMsg) -> dict:
     return evaluate_embedding(
-        np.array(msg.embedding), msg.camera_id, frame_id=msg.frame_id, track_id=msg.track_id, model_version="primary"
+        np.array(msg.embedding),
+        msg.camera_id,
+        frame_id=msg.frame_id,
+        track_id=msg.track_id,
+        model_version="primary",
+        access_check=is_access_allowed,
     )
+
+
+def _status_for(result: dict) -> str:
+    if not result["matched"]:
+        return "IDENTITY UNKNOWN"
+    if result["access_granted"] is False:
+        return "ACCESS DENIED"
+    return "ACCESS GRANTED"
 
 
 def _handle(msg: EmbeddingMsg) -> None:
@@ -35,10 +50,13 @@ def _handle(msg: EmbeddingMsg) -> None:
             MATCH_DECISIONS.labels(camera_id=msg.camera_id, result="error").inc()
             return
 
+    status = _status_for(result)
     MATCH_DECISIONS.labels(camera_id=msg.camera_id, result="confirmed" if result["matched"] else "unknown").inc()
+    if status == "ACCESS DENIED":
+        fire_alert("access_denied", camera_id=msg.camera_id, identity_id=result["identity_id"], score=result["score"])
     live_feed.publish_threadsafe(
         {
-            "status": "IDENTITY CONFIRMED" if result["matched"] else "IDENTITY UNKNOWN",
+            "status": status,
             "camera_id": msg.camera_id,
             "track_id": msg.track_id,
             "bbox": msg.bbox,

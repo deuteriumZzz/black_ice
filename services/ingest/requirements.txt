@@ -1,5 +1,6 @@
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
+requests==2.32.3
 confluent-kafka==2.5.3
 pydantic-settings==2.5.2
 prometheus-client==0.20.0

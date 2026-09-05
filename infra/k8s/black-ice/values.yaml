@@ -24,6 +24,43 @@ shadowEmbedding:
 
 apiKeys: "change-me-admin:admin,change-me-operator:operator"  # -> Secret; override per-environment
 
+# Real IdP (libs/black_ice_common/oidc.py), opt-in. When "oidc", match
+# validates a Bearer JWT against issuerUrl instead of X-API-Key/apiKeys
+# above — apiKeys stays rendered either way (switching back needs no
+# redeploy of secrets). issuerUrl is what tokens must carry as `iss` and is
+# what match uses for discovery too, UNLESS discoveryUrl is set — only
+# needed when match and the SPA reach the IdP via different hostnames
+# (there usually is just one real public hostname in production, reachable
+# by both — see infra/docker-compose.yml's keycloak service for why local
+# compose needs the split).
+auth:
+  backend: "api_key"  # "api_key" | "oidc"
+  oidc:
+    issuerUrl: "https://idp.example.com/realms/black-ice"
+    discoveryUrl: ""  # "" = same as issuerUrl
+
+# Vault-backed secrets (libs/black_ice_common/secrets.py), opt-in. When enabled,
+# this chart stops rendering databaseUrl/apiKeys into a plaintext K8s Secret —
+# the app reads them from Vault's KV v2 API at startup instead. vaultTokenSecretRef
+# names an EXTERNAL Secret (created by your Vault auth integration — e.g. the
+# Vault Agent Injector or External Secrets Operator, not this chart) holding a
+# short-lived VAULT_TOKEN; this chart deliberately does not mint or store that
+# token itself, since a static long-lived token baked into values.yaml would
+# just move the plaintext-secret problem, not solve it.
+vault:
+  enabled: false
+  addr: "http://vault.vault.svc.cluster.local:8200"
+  kvPath: "secret/data/black-ice"
+  vaultTokenSecretRef: "vault-token"  # must have a VAULT_TOKEN key
+
+# Ingest orchestration (STATUS.md gap): "none" keeps the static ingest.cameras
+# list below as the only way to deploy an ingest pod. "kubernetes" additionally
+# lets match create/delete one Deployment per camera at runtime as cameras are
+# registered via the API/admin-ui (see libs/black_ice_common/ingest_orchestrator.py)
+# — grants match's ServiceAccount deployments RBAC (ingest-orchestrator-rbac.yaml)
+# only when this is "kubernetes", least-privilege by default.
+orchestratorBackend: "none"  # "none" | "kubernetes" ("docker" only applies to local compose)
+
 ingest:
   cameras:
     - id: cam-0
@@ -79,3 +116,18 @@ driftMonitorCronJob:
   enabled: true
   schedule: "0 * * * *"  # hourly
   pushgatewayUrl: "http://pushgateway.observability.svc.cluster.local:9091"
+
+cameraOfflineCronJob:
+  enabled: true
+  schedule: "*/5 * * * *"  # every 5 minutes — cheap DB scan, catches an offline camera fast
+
+# HA/DR (STATUS.md gap): scripts/backup_{postgres,qdrant}.py, writing to a PVC
+# so backups outlive the pod that made them. This complements, not replaces,
+# clustered HA for Postgres/Qdrant themselves (see README's HA/DR section) —
+# this chart deliberately doesn't bundle stateful infra, so real replication
+# comes from your Postgres/Qdrant operator, not from this CronJob.
+backupCronJob:
+  enabled: true
+  schedule: "0 3 * * *"  # daily at 03:00
+  storageClassName: ""  # "" = cluster default
+  storageSize: "10Gi"

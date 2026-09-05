@@ -1,5 +1,7 @@
 from pydantic_settings import BaseSettings
 
+from black_ice_common.secrets import get_secret
+
 
 class Settings(BaseSettings):
     # Kafka / Redpanda (Kafka-protocol compatible; swap bootstrap_servers for a real
@@ -42,6 +44,10 @@ class Settings(BaseSettings):
     camera_id: str = "cam-0"
     source: str = "demo"  # "demo" | webcam index (e.g. "0") | rtsp:// url | file path
     ingest_fps: float = 5.0
+    # Where ingest fetches its own camera config from (skipped entirely in
+    # SOURCE=demo mode, which stays fully env-driven — see services/ingest/main.py).
+    match_api_url: str = "http://localhost:8000"
+    heartbeat_interval_s: float = 5.0
 
     # Tracking / frame sampling (see services/tracking) — avoids re-embedding a
     # static face on every frame
@@ -73,8 +79,45 @@ class Settings(BaseSettings):
 
     metrics_port: int = 9100
 
+    # Alerting (see libs/black_ice_common/alerting.py, Phase 1 Milestone 4).
+    # A camera silent longer than this (no heartbeat — see Milestone 2) is
+    # "offline" for scripts/camera_offline_check.py. Bigger than admin-ui's
+    # own 30s staleness badge threshold on purpose: this fires a real webhook,
+    # not just a UI dot, so it should tolerate a couple of missed heartbeats
+    # before alerting, not the first one.
+    camera_offline_threshold_s: float = 60.0
+    alert_webhook_timeout_s: float = 5.0
+
+    # Ingest orchestration (see ingest_orchestrator.py) — Milestone 2's known
+    # gap: registering a camera configured it but never deployed a process
+    # for it. "none" keeps that manual workflow; "docker"/"kubernetes"
+    # auto-deploy one ingest process per camera on create/enable and tear it
+    # down on delete/disable.
+    orchestrator_backend: str = "none"  # "none" | "docker" | "kubernetes"
+    ingest_image: str = "infra-ingest:latest"
+    orchestrator_docker_network: str | None = None  # None = auto-detect match's own network
+    k8s_namespace: str = "default"
+
+    # Real IdP (see libs/black_ice_common/oidc.py) — replaces static API keys
+    # when set to "oidc". Built and verified against Keycloak; any standards-
+    # compliant OpenID Connect provider works since discovery/JWKS are fetched
+    # dynamically, not hardcoded to Keycloak's URL shape.
+    auth_backend: str = "api_key"  # "api_key" | "oidc"
+    oidc_issuer_url: str | None = None  # the `iss` claim every token must carry, e.g. http://localhost:8180/realms/black-ice
+    # Where match itself fetches discovery/JWKS from — defaults to oidc_issuer_url
+    # (the normal case: one real public hostname reachable by both the SPA and
+    # match). Only needs overriding in local compose, where the browser can
+    # reach Keycloak solely via its published port (oidc_issuer_url) while match
+    # reaches it via the compose-internal service name instead — Keycloak's
+    # fixed KC_HOSTNAME makes every token's `iss` the same either way.
+    oidc_discovery_url: str | None = None
+    oidc_audience: str | None = None  # verified only when set — Keycloak's default access token has no aud claim
+
     class Config:
         env_file = ".env"
 
 
 settings = Settings()
+# Vault override, opt-in (see secrets.py) — a no-op when VAULT_ADDR isn't set,
+# so plain env vars/`.env` keep working unchanged for local dev/compose.
+settings.database_url = get_secret("DATABASE_URL", default=settings.database_url)

@@ -14,13 +14,16 @@ spec:
         app: black-ice-match
         {{- include "black-ice.componentLabels" (dict "component" "match" "Release" .Release) | nindent 8 }}
     spec:
+      {{- if eq .Values.orchestratorBackend "kubernetes" }}
+      serviceAccountName: black-ice-match
+      {{- end }}
       containers:
         - name: match
           image: {{ include "black-ice.image" (dict "component" "match" "Values" .Values) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           envFrom:
             - configMapRef: { name: black-ice-config }
-            - secretRef: { name: black-ice-secrets }
+            {{- include "black-ice.secretsEnvFrom" . | nindent 12 }}
           ports:
             - containerPort: 8000
               name: http

@@ -18,5 +18,5 @@ spec:
               command: ["python", "scripts/purge_expired.py"]
               envFrom:
                 - configMapRef: { name: black-ice-config }
-                - secretRef: { name: black-ice-secrets }
+                {{- include "black-ice.secretsEnvFrom" . | nindent 16 }}
 {{- end }}

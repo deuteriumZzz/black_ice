@@ -1,0 +1,22 @@
+{{- if .Values.cameraOfflineCronJob.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: black-ice-camera-offline-check
+  labels:
+    {{- include "black-ice.componentLabels" (dict "component" "camera-offline-check" "Release" .Release) | nindent 4 }}
+spec:
+  schedule: {{ .Values.cameraOfflineCronJob.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: camera-offline-check
+              image: {{ include "black-ice.image" (dict "component" "match" "Values" .Values) }}
+              command: ["python", "scripts/camera_offline_check.py"]
+              envFrom:
+                - configMapRef: { name: black-ice-config }
+                {{- include "black-ice.secretsEnvFrom" . | nindent 16 }}
+{{- end }}

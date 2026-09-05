@@ -20,8 +20,11 @@ def test_login_rejects_unknown_key(match_client):
 
 
 def test_login_rejects_missing_key(match_client):
+    # X-API-Key and Authorization are both optional at the FastAPI layer now
+    # (oidc mode uses Authorization instead — see rbac.py's auth_backend
+    # switch), so "no credential at all" is our own 401, not FastAPI's 422.
     r = match_client.post("/auth/login")
-    assert r.status_code == 422  # Header(...) required, FastAPI's own validation
+    assert r.status_code == 401
 
 
 def test_list_identities_requires_enroll_permission(match_client):

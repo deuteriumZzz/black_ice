@@ -9,6 +9,8 @@ x-python-env: &python-env
   # Flip to "true" to also run buffalo_s (see embedding.py) against a separate
   # gallery on every enroll/frame and compare via scripts/shadow_report.py.
   SHADOW_EMBEDDING_ENABLED: "false"
+  # Where ingest fetches its camera config from (skipped when SOURCE=demo).
+  MATCH_API_URL: http://match:8000
 
 services:
   # --- infra ---
@@ -35,7 +37,16 @@ services:
       - qdrant_data:/qdrant/storage
 
   postgres:
-    image: postgres:16-alpine
+    # pg_dump/pg_restore in the match image (services/match/Dockerfile) come
+    # from Debian's default postgresql-client package, which floats to
+    # whatever major version Debian currently ships (17 as of this comment) —
+    # pg_restore rejects session-level GUCs from a newer major (real bug found
+    # via live HA/DR testing: "unrecognized configuration parameter
+    # transaction_timeout" restoring a v17 dump into a v16 server). Keeping
+    # this in sync with that client's major version avoids it outright,
+    # instead of pinning a specific postgresql-client-<N> via an extra PGDG
+    # apt repo in the Dockerfile.
+    image: postgres:17-alpine
     environment:
       - POSTGRES_USER=black_ice
       - POSTGRES_PASSWORD=black_ice
@@ -95,6 +106,11 @@ services:
       - postgres
     volumes:
       - insightface_models:/root/.insightface
+      # Only used when ORCHESTRATOR_BACKEND=docker is set (via .env, opt-in —
+      # default is "none"). Mounting the host's Docker socket into match lets
+      # it deploy/remove one ingest container per camera; ingest_image
+      # defaults to this compose project's own "infra-ingest:latest" tag.
+      - /var/run/docker.sock:/var/run/docker.sock
 
   ui:
     image: python:3.11-slim
@@ -153,6 +169,54 @@ services:
     profiles: ["observability"]
     ports:
       - "9091:9091"
+
+  # --- secrets (docker compose --profile secrets up vault) ---
+  vault:
+    # Dev-mode server: unsealed, in-memory, fixed root token — for exercising
+    # libs/black_ice_common/secrets.py locally, not a production Vault setup.
+    # A real deployment runs a proper Vault cluster and gives match/ingest a
+    # scoped token (e.g. via the Vault K8s auth method), not this root token.
+    image: hashicorp/vault:1.18
+    profiles: ["secrets"]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: dev-vault-root-token
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    cap_add:
+      - IPC_LOCK
+    ports:
+      - "8200:8200"
+
+  # --- real IdP (docker compose --profile idp up keycloak) ---
+  keycloak:
+    # Dev-mode server (start-dev: in-memory H2, not for production) that
+    # auto-imports infra/keycloak/realm-export.json on boot — a "black-ice"
+    # realm with admin/operator/viewer roles, a public SPA client
+    # (black-ice-admin-ui, PKCE required) and three seeded dev users, so
+    # `docker compose --profile idp up keycloak` is immediately usable
+    # without any manual admin-console clicking.
+    image: quay.io/keycloak/keycloak:26.0
+    profiles: ["idp"]
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      # Fixed (not request-reflected) so every token's `iss` is the same
+      # value regardless of whether it was reached via this published port
+      # (the browser's only option) or the compose-internal "keycloak:8080"
+      # (what match uses — see oidc.py's oidc_discovery_url split for why).
+      KC_HOSTNAME: http://localhost:8180
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    ports:
+      - "8180:8080"
+
+# To point match at Keycloak instead of static API keys, add to .env:
+#   AUTH_BACKEND=oidc
+#   OIDC_ISSUER_URL=http://localhost:8180/realms/black-ice
+#   OIDC_DISCOVERY_URL=http://keycloak:8080/realms/black-ice
+# (two different hostnames on purpose — see oidc.py's module docstring)
 
 # One-off maintenance jobs reuse the `match` service's image (it already has
 # scripts/ + every dependency they need) — override its command, don't add it to

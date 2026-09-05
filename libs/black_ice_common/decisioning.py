@@ -24,13 +24,20 @@ def evaluate_embedding(
     collection: str | None = None,
     threshold: float | None = None,
     requested_by: str = "stream",
+    access_check=None,
 ) -> dict:
+    """access_check, when given, is called as access_check(identity_id, camera_id)
+    -> bool only on a biometric match, to decide the real-world access outcome
+    (Phase 1 Milestone 3). Left None for the shadow-mode consumer, which only
+    compares candidate-model biometric accuracy and must never be gated by
+    access rules meant for the primary decision."""
     threshold = settings.match_threshold if threshold is None else threshold
     hits = vectorstore.search_face(embedding, limit=1, collection=collection)
     score = float(hits[0].score) if hits else -1.0
     matched = bool(hits) and is_match(score, threshold)
     identity_id = hits[0].payload["identity_id"] if matched else None
     name = hits[0].payload["name"] if matched else None
+    access_granted = access_check(identity_id, camera_id) if (matched and access_check) else None
 
     with db.SessionLocal() as session:
         session.add(
@@ -43,8 +50,9 @@ def evaluate_embedding(
                 frame_id=frame_id,
                 track_id=track_id,
                 model_version=model_version,
+                access_granted=access_granted,
             )
         )
         session.commit()
 
-    return {"matched": matched, "score": score, "identity_id": identity_id, "name": name}
+    return {"matched": matched, "score": score, "identity_id": identity_id, "name": name, "access_granted": access_granted}

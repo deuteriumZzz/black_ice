@@ -1,0 +1,37 @@
+{{- if .Values.backupCronJob.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: black-ice-backup
+  labels:
+    {{- include "black-ice.componentLabels" (dict "component" "backup" "Release" .Release) | nindent 4 }}
+spec:
+  schedule: {{ .Values.backupCronJob.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: {{ include "black-ice.image" (dict "component" "match" "Values" .Values) }}
+              # both backups in one container, one PVC — a single small CronJob
+              # beats two Jobs racing to write different subdirs of the same volume.
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  python scripts/backup_postgres.py --out-dir /backups/postgres
+                  python scripts/backup_qdrant.py --out-dir /backups/qdrant
+              envFrom:
+                - configMapRef: { name: black-ice-config }
+                {{- include "black-ice.secretsEnvFrom" . | nindent 16 }}
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: black-ice-backups
+{{- end }}

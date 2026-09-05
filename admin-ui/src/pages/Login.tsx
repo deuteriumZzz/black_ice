@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ApiError, useAuth } from '@/contexts/AuthContext'
+import { AUTH_MODE } from '@/lib/keycloak'
 
 export function LoginPage() {
   const { login, status } = useAuth()
@@ -14,6 +15,23 @@ export function LoginPage() {
   const [submitting, setSubmitting] = React.useState(false)
 
   if (status === 'authenticated') return <Navigate to="/" replace />
+
+  if (AUTH_MODE === 'oidc') {
+    return (
+      <div className="flex h-full items-center justify-center bg-background">
+        <Card className="w-80">
+          <CardHeader>
+            <CardTitle>BLACK ICE console</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Button className="w-full" onClick={() => login()}>
+              Sign in with Keycloak
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()

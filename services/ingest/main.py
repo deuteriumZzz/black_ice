@@ -3,17 +3,23 @@ across threads under the GIL, so the unit of scale is the process/container, not
 thread inside one). Reads frames and publishes them to Kafka; does no CV work itself.
 
 SOURCE="demo" loops over ml/eval/sample_frames/*.jpg — lets the whole pipeline run
-without a webcam or RTSP feed. Point SOURCE at a webcam index ("0"), a video file
-path, or an rtsp:// URL to use a real feed.
+without a webcam or RTSP feed, and skips the camera-registry lookup below entirely
+(no match service needed to run the demo path). Any other value means this ingest
+is a real camera: at startup it fetches its own source/fps from match's camera
+registry (GET /cameras/{camera_id}/config, see Phase 1 Milestone 2) rather than
+from SOURCE/INGEST_FPS env vars directly — those two env vars are only the
+fallback used when the registry lookup itself fails to start (see _resolve_config).
 """
 import glob
 import itertools
 import logging
 import os
+import threading
 import time
 import uuid
 
 import cv2
+import requests
 
 from black_ice_common.config import settings
 from black_ice_common.kafka_io import get_producer, produce_json
@@ -49,14 +55,58 @@ def _capture_frames(source: str):
         yield frame
 
 
+def _resolve_config(camera_id: str) -> tuple[str, float]:
+    """Fetches (source, ingest_fps) from match's camera registry. Retries a
+    handful of times for transient failures (match still starting up) but
+    fails hard on 404/403 — a misconfigured camera silently capturing the
+    wrong source, or a disabled one capturing at all, is worse than a
+    container that crashes loudly and gets noticed."""
+    url = f"{settings.match_api_url}/cameras/{camera_id}/config"
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, timeout=5)
+        except requests.RequestException as exc:
+            last_error = exc
+            log.warning("camera config fetch failed (attempt %d/3): %s", attempt + 1, exc)
+            time.sleep(2**attempt)
+            continue
+        if resp.status_code == 404:
+            raise RuntimeError(f"camera '{camera_id}' is not registered — add it via the admin console first")
+        if resp.status_code == 403:
+            raise RuntimeError(f"camera '{camera_id}' is registered but disabled")
+        resp.raise_for_status()
+        data = resp.json()
+        return data["source"], data["ingest_fps"]
+    raise RuntimeError(f"could not reach camera registry at {url} after 3 attempts: {last_error}")
+
+
+def _heartbeat_loop(camera_id: str) -> None:
+    url = f"{settings.match_api_url}/cameras/{camera_id}/heartbeat"
+    while True:
+        try:
+            requests.post(url, timeout=5)
+        except requests.RequestException as exc:
+            log.warning("heartbeat failed: %s", exc)
+        time.sleep(settings.heartbeat_interval_s)
+
+
 def run() -> None:
     serve_metrics(settings.metrics_port)
     tracer = init_tracing("black-ice-ingest")
     producer = get_producer()
-    frame_iter = _demo_frames() if settings.source == "demo" else _capture_frames(settings.source)
-    period = 1.0 / settings.ingest_fps
 
-    log.info("ingest starting: camera_id=%s source=%s fps=%s", settings.camera_id, settings.source, settings.ingest_fps)
+    if settings.source == "demo":
+        frame_iter = _demo_frames()
+        resolved_source, fps = "demo", settings.ingest_fps
+    else:
+        resolved_source, fps = _resolve_config(settings.camera_id)
+        frame_iter = _capture_frames(resolved_source)
+        threading.Thread(target=_heartbeat_loop, args=(settings.camera_id,), daemon=True).start()
+
+    period = 1.0 / fps
+
+    log.info("ingest starting: camera_id=%s source=%s fps=%s", settings.camera_id, resolved_source, fps)
     for frame in frame_iter:
         start = time.monotonic()
         with tracer.start_as_current_span("ingest.publish_frame"):

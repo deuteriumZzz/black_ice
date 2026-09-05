@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_client import make_asgi_app
+from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -16,8 +17,9 @@ from starlette.requests import Request
 from black_ice_common.config import settings
 import black_ice_common.db as db
 from black_ice_common.decision import is_match
+from black_ice_common.ingest_orchestrator import deploy_ingest, remove_ingest
 from black_ice_common.liveness import assess_liveness
-from black_ice_common.rbac import lookup_key, require, seed_from_env
+from black_ice_common.rbac import authenticate_for_login, require, seed_from_env
 from black_ice_common.tracing import init_tracing
 from black_ice_common.vectorstore import delete_identity_vectors, ensure_collection, search_face, upsert_face
 from services.match.app.face import largest_face, liveness_engine, shadow_embedder
@@ -38,6 +40,52 @@ app.add_middleware(
 app.mount("/metrics", make_asgi_app())
 init_tracing("black-ice-match")
 FastAPIInstrumentor.instrument_app(app)
+
+
+class CameraCreate(BaseModel):
+    camera_id: str
+    name: str
+    source: str
+    site: str | None = None
+    ingest_fps: float = 5.0
+
+
+class CameraUpdate(BaseModel):
+    name: str | None = None
+    source: str | None = None
+    site: str | None = None
+    ingest_fps: float | None = None
+    enabled: bool | None = None
+
+
+class AccessRuleCreate(BaseModel):
+    identity_id: str
+    camera_id: str | None = None
+    weekdays: str | None = None
+    start_time: datetime.time | None = None
+    end_time: datetime.time | None = None
+
+
+class AccessRuleUpdate(BaseModel):
+    camera_id: str | None = None
+    weekdays: str | None = None
+    start_time: datetime.time | None = None
+    end_time: datetime.time | None = None
+    enabled: bool | None = None
+
+
+class AlertRuleCreate(BaseModel):
+    event_type: str
+    identity_id: str | None = None
+    camera_id: str | None = None
+    webhook_url: str
+
+
+class AlertRuleUpdate(BaseModel):
+    identity_id: str | None = None
+    camera_id: str | None = None
+    webhook_url: str | None = None
+    enabled: bool | None = None
 
 
 @app.on_event("startup")
@@ -222,11 +270,9 @@ def list_identities(limit: int = 50, offset: int = 0, _role: str = Depends(requi
 
 @app.post("/auth/login")
 @limiter.limit(settings.rate_limit)
-def login(request: Request, x_api_key: str = Header(...)):
-    found = lookup_key(x_api_key)
-    if found is None:
-        raise HTTPException(401, "invalid API key")
-    return {"role": found.role, "label": found.label}
+def login(request: Request, x_api_key: str | None = Header(default=None), authorization: str | None = Header(default=None)):
+    role, label = authenticate_for_login(x_api_key, authorization)
+    return {"role": role, "label": label}
 
 
 @app.delete("/identities/{identity_id}")
@@ -243,6 +289,218 @@ def revoke_identity(identity_id: str, _role: str = Depends(require("enroll"))):
         session.commit()
     delete_identity_vectors(identity_id)
     return {"status": "IDENTITY REVOKED", "identity_id": identity_id}
+
+
+def _camera_dict(camera: "db.Camera") -> dict:
+    return {
+        "id": camera.id,
+        "camera_id": camera.camera_id,
+        "name": camera.name,
+        "source": camera.source,
+        "site": camera.site,
+        "enabled": camera.enabled,
+        "ingest_fps": camera.ingest_fps,
+        "created_at": camera.created_at.isoformat(),
+        "last_seen_at": camera.last_seen_at.isoformat() if camera.last_seen_at else None,
+    }
+
+
+@app.get("/cameras")
+def list_cameras(_role: str = Depends(require("cameras"))):
+    with db.SessionLocal() as session:
+        rows = session.query(db.Camera).order_by(db.Camera.created_at.desc()).all()
+        return [_camera_dict(r) for r in rows]
+
+
+@app.post("/cameras")
+def create_camera(body: CameraCreate, _role: str = Depends(require("cameras"))):
+    with db.SessionLocal() as session:
+        if session.query(db.Camera).filter(db.Camera.camera_id == body.camera_id).first() is not None:
+            raise HTTPException(409, "camera_id already exists")
+        camera = db.Camera(**body.model_dump())
+        session.add(camera)
+        session.commit()
+        session.refresh(camera)
+        result = _camera_dict(camera)
+    if camera.enabled:
+        deploy_ingest(camera.camera_id)
+    return result
+
+
+@app.patch("/cameras/{id}")
+def update_camera(id: str, body: CameraUpdate, _role: str = Depends(require("cameras"))):
+    with db.SessionLocal() as session:
+        camera = session.get(db.Camera, id)
+        if camera is None:
+            raise HTTPException(404, "camera not found")
+        was_enabled = camera.enabled
+        for field, value in body.model_dump(exclude_unset=True).items():
+            setattr(camera, field, value)
+        session.commit()
+        session.refresh(camera)
+        result = _camera_dict(camera)
+        camera_id, now_enabled = camera.camera_id, camera.enabled
+    if now_enabled and not was_enabled:
+        deploy_ingest(camera_id)
+    elif was_enabled and not now_enabled:
+        remove_ingest(camera_id)
+    return result
+
+
+@app.delete("/cameras/{id}")
+def delete_camera(id: str, _role: str = Depends(require("cameras"))):
+    with db.SessionLocal() as session:
+        camera = session.get(db.Camera, id)
+        if camera is None:
+            raise HTTPException(404, "camera not found")
+        camera_id = camera.camera_id
+        session.delete(camera)
+        session.commit()
+    remove_ingest(camera_id)
+    return {"status": "CAMERA REMOVED", "id": id}
+
+
+@app.get("/cameras/{camera_id}/config")
+def camera_config(camera_id: str):
+    """Called by ingest at startup to resolve its own capture config — not
+    behind require() because ingest has no API key today (see README's
+    security gaps: service-to-service auth is a Phase 4 item, not solved
+    here). Deliberately returns only capture-config fields, nothing else."""
+    with db.SessionLocal() as session:
+        camera = session.query(db.Camera).filter(db.Camera.camera_id == camera_id).first()
+        if camera is None:
+            raise HTTPException(404, "camera not found")
+        if not camera.enabled:
+            raise HTTPException(403, "camera is disabled")
+        return {"source": camera.source, "ingest_fps": camera.ingest_fps}
+
+
+@app.post("/cameras/{camera_id}/heartbeat")
+def camera_heartbeat(camera_id: str):
+    with db.SessionLocal() as session:
+        camera = session.query(db.Camera).filter(db.Camera.camera_id == camera_id).first()
+        if camera is None:
+            raise HTTPException(404, "camera not found")
+        camera.last_seen_at = datetime.datetime.utcnow()
+        session.commit()
+    return {"status": "ok"}
+
+
+def _access_rule_dict(rule: "db.AccessRule") -> dict:
+    return {
+        "id": rule.id,
+        "identity_id": rule.identity_id,
+        "camera_id": rule.camera_id,
+        "weekdays": rule.weekdays,
+        "start_time": rule.start_time.isoformat() if rule.start_time else None,
+        "end_time": rule.end_time.isoformat() if rule.end_time else None,
+        "enabled": rule.enabled,
+        "created_at": rule.created_at.isoformat(),
+    }
+
+
+@app.get("/access-rules")
+def list_access_rules(identity_id: str | None = None, _role: str = Depends(require("access_rules"))):
+    with db.SessionLocal() as session:
+        query = session.query(db.AccessRule)
+        if identity_id:
+            query = query.filter(db.AccessRule.identity_id == identity_id)
+        rows = query.order_by(db.AccessRule.created_at.desc()).all()
+        return [_access_rule_dict(r) for r in rows]
+
+
+@app.post("/access-rules")
+def create_access_rule(body: AccessRuleCreate, _role: str = Depends(require("access_rules"))):
+    with db.SessionLocal() as session:
+        if session.get(db.Identity, body.identity_id) is None:
+            raise HTTPException(404, "identity not found")
+        rule = db.AccessRule(**body.model_dump())
+        session.add(rule)
+        session.commit()
+        session.refresh(rule)
+        return _access_rule_dict(rule)
+
+
+@app.patch("/access-rules/{id}")
+def update_access_rule(id: str, body: AccessRuleUpdate, _role: str = Depends(require("access_rules"))):
+    with db.SessionLocal() as session:
+        rule = session.get(db.AccessRule, id)
+        if rule is None:
+            raise HTTPException(404, "access rule not found")
+        for field, value in body.model_dump(exclude_unset=True).items():
+            setattr(rule, field, value)
+        session.commit()
+        session.refresh(rule)
+        return _access_rule_dict(rule)
+
+
+@app.delete("/access-rules/{id}")
+def delete_access_rule(id: str, _role: str = Depends(require("access_rules"))):
+    with db.SessionLocal() as session:
+        rule = session.get(db.AccessRule, id)
+        if rule is None:
+            raise HTTPException(404, "access rule not found")
+        session.delete(rule)
+        session.commit()
+    return {"status": "ACCESS RULE REMOVED", "id": id}
+
+
+_ALERT_EVENT_TYPES = {"access_denied", "camera_offline"}
+
+
+def _alert_rule_dict(rule: "db.AlertRule") -> dict:
+    return {
+        "id": rule.id,
+        "event_type": rule.event_type,
+        "identity_id": rule.identity_id,
+        "camera_id": rule.camera_id,
+        "webhook_url": rule.webhook_url,
+        "enabled": rule.enabled,
+        "created_at": rule.created_at.isoformat(),
+    }
+
+
+@app.get("/alert-rules")
+def list_alert_rules(_role: str = Depends(require("alert_rules"))):
+    with db.SessionLocal() as session:
+        rows = session.query(db.AlertRule).order_by(db.AlertRule.created_at.desc()).all()
+        return [_alert_rule_dict(r) for r in rows]
+
+
+@app.post("/alert-rules")
+def create_alert_rule(body: AlertRuleCreate, _role: str = Depends(require("alert_rules"))):
+    if body.event_type not in _ALERT_EVENT_TYPES:
+        raise HTTPException(400, f"event_type must be one of {sorted(_ALERT_EVENT_TYPES)}")
+    with db.SessionLocal() as session:
+        rule = db.AlertRule(**body.model_dump())
+        session.add(rule)
+        session.commit()
+        session.refresh(rule)
+        return _alert_rule_dict(rule)
+
+
+@app.patch("/alert-rules/{id}")
+def update_alert_rule(id: str, body: AlertRuleUpdate, _role: str = Depends(require("alert_rules"))):
+    with db.SessionLocal() as session:
+        rule = session.get(db.AlertRule, id)
+        if rule is None:
+            raise HTTPException(404, "alert rule not found")
+        for field, value in body.model_dump(exclude_unset=True).items():
+            setattr(rule, field, value)
+        session.commit()
+        session.refresh(rule)
+        return _alert_rule_dict(rule)
+
+
+@app.delete("/alert-rules/{id}")
+def delete_alert_rule(id: str, _role: str = Depends(require("alert_rules"))):
+    with db.SessionLocal() as session:
+        rule = session.get(db.AlertRule, id)
+        if rule is None:
+            raise HTTPException(404, "alert rule not found")
+        session.delete(rule)
+        session.commit()
+    return {"status": "ALERT RULE REMOVED", "id": id}
 
 
 @app.websocket("/ws/live")
