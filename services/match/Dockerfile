@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY libs ./libs
 COPY services/match ./services/match
 COPY scripts ./scripts
+COPY ml/models ./ml/models
 ENV PYTHONPATH=/srv:/srv/libs
 
 EXPOSE 8000

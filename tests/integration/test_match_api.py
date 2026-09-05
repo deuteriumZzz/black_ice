@@ -110,7 +110,10 @@ def test_multi_embedding_enrollment_adds_to_existing_identity(match_client):
 def test_liveness_check_off_by_default_on_by_flag(match_client, monkeypatch, tmp_path):
     """The heuristic in libs/black_ice_common/liveness.py is disabled by default —
     confirm identify ignores it normally, and actually rejects a blurred image
-    once the operator opts in via config."""
+    once the operator opts in via config. Forces the heuristic (not the bundled
+    trained model, which is the new default once enabled — see
+    tests/unit/test_liveness.py for that path) since this test's assertion is
+    specifically about the heuristic's blur sensitivity."""
     import black_ice_common.config as config
 
     img_path = _sample_image_path()
@@ -122,6 +125,7 @@ def test_liveness_check_off_by_default_on_by_flag(match_client, monkeypatch, tmp
     assert r.json()["status"] != "LIVENESS CHECK FAILED", "liveness check must be off by default"
 
     monkeypatch.setattr(config.settings, "liveness_check_enabled", True)
+    monkeypatch.setattr(config.settings, "liveness_onnx_model_path", "")
     with open(blurred_path, "rb") as f:
         r = match_client.post("/identify", files={"file": ("blurred.jpg", f, "image/jpeg")}, headers={"X-API-Key": "op-key"})
     assert r.json()["status"] == "LIVENESS CHECK FAILED"

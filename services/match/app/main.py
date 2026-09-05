@@ -186,17 +186,16 @@ def identify(request: Request, file: UploadFile = File(...), role: str = Depends
     bbox, kps, det_score, embedding = found
 
     if settings.liveness_check_enabled:
-        x1, y1, x2, y2 = (int(v) for v in bbox)
-        crop = image[max(0, y1):y2, max(0, x1):x2]
-        liveness = None if crop.size == 0 else assess_liveness(
-            crop,
+        liveness = assess_liveness(
+            image,
+            bbox,
             onnx_engine=liveness_engine(),
             onnx_threshold=settings.liveness_onnx_threshold,
             min_sharpness=settings.liveness_min_sharpness,
             min_chroma_std=settings.liveness_min_chroma_std,
         )
-        if liveness is None or not liveness.is_live:
-            return {"status": "LIVENESS CHECK FAILED", "bbox": _hex_bbox(bbox), "liveness_method": liveness.method if liveness else "n/a"}
+        if not liveness.is_live:
+            return {"status": "LIVENESS CHECK FAILED", "bbox": _hex_bbox(bbox), "liveness_method": liveness.method}
 
     hits = search_face(embedding, limit=1)
     score = float(hits[0].score) if hits else -1.0

@@ -55,13 +55,15 @@ class Settings(BaseSettings):
     track_max_age_frames: int = 30
     track_iou_distance_threshold: float = 0.7
 
-    # Liveness (see libs/black_ice_common/liveness.py). Heuristic is off by
-    # default; set liveness_onnx_model_path to a converted anti-spoofing
-    # checkpoint to use a real trained classifier instead.
+    # Liveness (see libs/black_ice_common/liveness.py). The check itself is
+    # off by default (liveness_check_enabled) — real false-reject rate on
+    # cheap webcams; flipping it on uses the bundled trained MiniFASNetV2
+    # model (ml/models/minifasnet_v2.onnx) by default, not the heuristic —
+    # set liveness_onnx_model_path to "" to force the heuristic instead.
     liveness_check_enabled: bool = False
     liveness_min_sharpness: float = 40.0
     liveness_min_chroma_std: float = 5.0
-    liveness_onnx_model_path: str | None = None
+    liveness_onnx_model_path: str | None = "ml/models/minifasnet_v2.onnx"
     liveness_onnx_threshold: float = 0.5
 
     # Rate limiting / circuit breaker on the match API
